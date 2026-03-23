@@ -1,13 +1,11 @@
 const https = require('https');
 
-// ── Config ──────────────────────────────────────────────
 const FEED_URL   = 'https://www.marleenkookt.nl/menu/feed/xml';
 const MEAT_TYPES = ['meat', 'fish', 'exclusive'];
 const VEG_TYPES  = ['vegetarian', 'bowl'];
 const SKIP_TYPES = ['kids', 'soup', 'dessert', 'breakfast'];
 const TYPE_NL    = { meat:'Vleesgerecht', fish:'Visgerecht', exclusive:'Exclusief', vegetarian:'Vegetarisch', bowl:'Salade' };
 
-// ── Helpers ─────────────────────────────────────────────
 function getNextMonday() {
   const d = new Date();
   const day = d.getDay();
@@ -33,7 +31,7 @@ function fetchXML(url) {
 }
 
 function getTagValue(str, tag) {
-  const match = str.match(new RegExp(`<${tag}[^>]*>([\\s\\S]*?)<\\/${tag}>`));
+  const match = str.match(new RegExp('<' + tag + '[^>]*>([\\s\\S]*?)<\\/' + tag + '>'));
   return match ? match[1].replace(/&amp;/g,'&').replace(/&#x20AC;/g,'€').replace(/&#xA0;/g,' ').replace(/<!\[CDATA\[|\]\]>/g,'').trim() : '';
 }
 
@@ -53,13 +51,18 @@ function parseProducts(xml, fromDate) {
       if (getTagValue(p, 'is_visible_in_menu') !== '1') continue;
       const type = getTagValue(p, 'type');
       if (SKIP_TYPES.includes(type)) continue;
+
+      // <n> is a single-char tag — needs its own regex
+      const nameMatch = p.match(/<n>([^<]+)<\/n>/);
+      const name = nameMatch ? nameMatch[1].trim() : '';
+
       products.push({
         date,
-        sku:       getTagValue(p, 'sku'),
-        name:      getTagValue(p, 'n'),
-        url:       getTagValue(p, 'url'),
-        image_url: getTagValue(p, 'image_url'),
-        price:     getTagValue(p, 'price'),
+        sku:         getTagValue(p, 'sku'),
+        name,
+        url:         getTagValue(p, 'url'),
+        image_url:   getTagValue(p, 'image_url'),
+        price:       getTagValue(p, 'price'),
         description: getTagValue(p, 'description'),
         type,
       });
@@ -76,26 +79,27 @@ function pickFour(products) {
   }
   const dates = Object.keys(byDate).sort();
   const picked = [];
+  const usedSkus = new Set();
 
   for (const date of dates) {
     if (picked.length >= 4) break;
     const day = byDate[date];
-    const meat = day.find(p => MEAT_TYPES.includes(p.type));
-    const veg  = day.find(p => VEG_TYPES.includes(p.type));
-    if (meat && picked.length < 4) picked.push(meat);
-    if (veg  && picked.length < 4) picked.push(veg);
+    const meat = day.find(p => MEAT_TYPES.includes(p.type) && !usedSkus.has(p.sku));
+    const veg  = day.find(p => VEG_TYPES.includes(p.type)  && !usedSkus.has(p.sku));
+    if (meat && picked.length < 4) { picked.push(meat); usedSkus.add(meat.sku); }
+    if (veg  && picked.length < 4) { picked.push(veg);  usedSkus.add(veg.sku);  }
   }
 
+  // fallback: fill remaining with any unused SKU
   if (picked.length < 4) {
     for (const p of products) {
       if (picked.length >= 4) break;
-      if (!picked.find(x => x.name === p.name)) picked.push(p);
+      if (!usedSkus.has(p.sku)) { picked.push(p); usedSkus.add(p.sku); }
     }
   }
   return picked.slice(0, 4);
 }
 
-// ── Handler ─────────────────────────────────────────────
 module.exports = async (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Cache-Control', 's-maxage=3600');
@@ -109,18 +113,21 @@ module.exports = async (req, res) => {
     const products = parseProducts(xml, fromDate);
     const four     = pickFour(products);
 
-    // Klaviyo catalog JSON format
+    if (four.length < 4) {
+      return res.status(200).json({ items: [] });
+    }
+
     const items = four.map((p, i) => ({
-      id:          p.sku || `item-${i}`,
+      id:          p.sku || 'item-' + i,
       title:       p.name,
       description: p.description,
       url:         p.url,
       image_url:   p.image_url,
       price:       parseFloat(p.price) || 0,
       custom_metadata: {
-        type:      p.type,
-        type_nl:   TYPE_NL[p.type] || p.type,
-        date:      p.date,
+        type:    p.type,
+        type_nl: TYPE_NL[p.type] || p.type,
+        date:    p.date,
       }
     }));
 
