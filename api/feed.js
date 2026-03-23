@@ -30,60 +30,57 @@ function fetchXML(url) {
   });
 }
 
-// Verbeterde tag extractor die CDATA en HTML entiteiten stript
 function getTag(str, tag) {
   const re = new RegExp('<' + tag + '[^>]*>([\\s\\S]*?)<\\/' + tag + '>', 'i');
   const m = str.match(re);
-  if (!m) return '';
-  
+  if (!m || !m[1]) return '';
+
   return m[1]
     .replace(/<!\[CDATA\[/gi, '')
     .replace(/\]\]>/gi, '')
     .replace(/&amp;/g, '&')
     .replace(/&#x20AC;/g, '€')
     .replace(/&#xA0;/g, ' ')
+    .replace(/\s+/g, ' ')
     .trim();
+}
+
+function titleFromUrl(url) {
+  if (!url) return '';
+  try {
+    const slug = url.split('/').pop().split('?')[0].replace('.html', '');
+    return slug.split('-').map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(' ');
+  } catch (e) { return ''; }
 }
 
 function parseProducts(xml, fromDate) {
   const products = [];
-  // Split de XML op de product tag om individuele blokken te krijgen
-  const productBlocks = xml.split(/<product\s+/i).slice(1);
+  const blocks = xml.split(/<product\s+/i).slice(1);
 
-  for (const block of productBlocks) {
-    const fullBlock = '<product ' + block; // Herstel de tag voor de parser
-    
-    // SKU uit de attribuut halen
-    const skuMatch = fullBlock.match(/sku="([^"]+)"/i);
-    const sku = skuMatch ? skuMatch[1] : '';
-
-    const date = getTag(fullBlock, 'date');
+  for (let block of blocks) {
+    const chunk = '<product ' + block;
+    const date = getTag(chunk, 'date');
     if (!date || date < fromDate) continue;
 
-    const isMain    = getTag(fullBlock, 'is_main_course');
-    const isVisible = getTag(fullBlock, 'is_visible_in_menu');
-    if (isMain !== '1' || isVisible !== '1') continue;
+    if (getTag(chunk, 'is_main_course') !== '1' || getTag(chunk, 'is_visible_in_menu') !== '1') continue;
 
-    const type = getTag(fullBlock, 'type');
+    const type = getTag(chunk, 'type');
     if (SKIP_TYPES.includes(type)) continue;
 
-    // PROBEER MEERDERE TAGS VOOR DE TITEL
-    let name = getTag(fullBlock, 'n'); // Vaak gebruikt in deze feed
-    if (!name) name = getTag(fullBlock, 'name'); // Fallback naar standaard name
-    if (!name) name = getTag(fullBlock, 'title'); // Tweede fallback
+    let name = getTag(chunk, 'n') || getTag(chunk, 'name') || titleFromUrl(getTag(chunk, 'url')) || "Lekker gerecht";
+    const skuMatch = chunk.match(/sku="([^"]+)"/i);
 
     products.push({
       date,
-      sku,
+      sku: skuMatch ? skuMatch[1] : 'MKM-' + Math.random().toString(36).substr(2, 5),
       name,
-      url:         getTag(fullBlock, 'url'),
-      image_url:   getTag(fullBlock, 'image_url'),
-      price:       getTag(fullBlock, 'price'),
-      description: getTag(fullBlock, 'description'),
+      url: getTag(chunk, 'url'),
+      image_url: getTag(chunk, 'image_url'),
+      price: getTag(chunk, 'price'),
+      description: getTag(chunk, 'description'),
       type,
     });
   }
-
   return products;
 }
 
@@ -101,36 +98,42 @@ function pickFour(products) {
     if (picked.length >= 4) break;
     const day = byDate[date];
     const meat = day.find(p => MEAT_TYPES.includes(p.type) && !usedSkus.has(p.sku));
-    const veg  = day.find(p => VEG_TYPES.includes(p.type)  && !usedSkus.has(p.sku));
     if (meat && picked.length < 4) { picked.push(meat); usedSkus.add(meat.sku); }
-    if (veg  && picked.length < 4) { picked.push(veg);  usedSkus.add(veg.sku);  }
-  }
-
-  if (picked.length < 4) {
-    for (const p of products) {
-      if (picked.length >= 4) break;
-      if (!usedSkus.has(p.sku)) { picked.push(p); usedSkus.add(p.sku); }
-    }
+    const veg = day.find(p => VEG_TYPES.includes(p.type) && !usedSkus.has(p.sku));
+    if (veg && picked.length < 4) { picked.push(veg); usedSkus.add(veg.sku); }
   }
   return picked.slice(0, 4);
 }
 
 module.exports = async (req, res) => {
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Cache-Control', 's-maxage=3600');
+  // FORCEER JSON HEADER
   res.setHeader('Content-Type', 'application/json; charset=utf-8');
+  res.setHeader('Access-Control-Allow-Origin', '*');
 
   try {
-    const monday   = getNextMonday();
-    const fromDate = toYMD(monday);
-
-    const xml      = await fetchXML(FEED_URL);
+    const fromDate = toYMD(getNextMonday());
+    const xml = await fetchXML(FEED_URL);
     const products = parseProducts(xml, fromDate);
-    const four     = pickFour(products);
+    const four = pickFour(products);
 
-    const items = four.map((p, i) => ({
-      id:          p.sku || 'item-' + i,
-      title:       p.name || 'Gerecht zonder naam', // Als alles faalt, toon dit
-      description: p.description,
-      url:         p.url,
-      image
+    // Formatteer specifiek voor de Klaviyo Catalogus
+    const items = four.map(p => ({
+      id:          p.sku,
+      title:       p.name,
+      description: p.description || "Vers bereid door Marleen",
+      link:        p.url,          // Belangrijk voor Klaviyo
+      image_link:  p.image_url,    // Belangrijk voor Klaviyo
+      price:       parseFloat(p.price) || 13.50,
+      categories:  [TYPE_NL[p.type] || p.type],
+      metadata: {
+        date: p.date,
+        type: p.type
+      }
+    }));
+
+    res.status(200).json(items); // Geef direct de array terug (is vaak makkelijker voor Klaviyo)
+
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
