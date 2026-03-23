@@ -30,46 +30,53 @@ function fetchXML(url) {
   });
 }
 
-// Verbeterde tag extractor die beter omgaat met korte tagnamen zoals <n>
+/**
+ * Super-robuuste tag extractor. 
+ * Zoekt naar <tag...>inhoud</tag> en filtert CDATA en HTML entiteiten.
+ */
 function getTag(str, tag) {
-  // Specifieke check voor de 'n' tag (titel) omdat die vaak de boosdoener is
-  const re = new RegExp('<' + tag + '[^>]*>([\\s\\S]*?)<\\/' + tag + '>');
+  // Deze regex is minder streng en pakt alles tussen de tags
+  const re = new RegExp('<' + tag + '[^>]*>([\\s\\S]*?)<\\/' + tag + '>', 'i');
   const m = str.match(re);
-  if (!m) return '';
-  
+  if (!m || !m[1]) return '';
+
   return m[1]
-    .replace(/<!\[CDATA\[/g, '')
-    .replace(/\]\]>/g, '')
+    .replace(/<!\[CDATA\[/gi, '') // Verwijder CDATA start
+    .replace(/\]\]>/gi, '')      // Verwijder CDATA eind
     .replace(/&amp;/g, '&')
     .replace(/&#x20AC;/g, '€')
     .replace(/&#xA0;/g, ' ')
+    .replace(/&nbsp;/g, ' ')
     .trim();
 }
 
 function parseProducts(xml, fromDate) {
   const products = [];
-  // De feed gebruikt <product sku="...">...</product>
-  const productRe = /<product\s+sku="([^"]+)">([\s\S]*?)<\/product>/g;
-  let match;
+  // Split de XML in producten op basis van de <product> tag
+  const productChunks = xml.split(/<product\s+/i).slice(1);
 
-  while ((match = productRe.exec(xml)) !== null) {
-    const sku   = match[1];
-    const chunk = match[2];
-
+  for (let chunk of productChunks) {
+    // Haal de SKU uit de openings-tag (bijv. sku="MKM123")
+    const skuMatch = chunk.match(/sku="([^"]+)"/i);
+    const sku = skuMatch ? skuMatch[1] : '';
+    
     const date = getTag(chunk, 'date');
     if (!date || date < fromDate) continue;
 
     const isMain    = getTag(chunk, 'is_main_course');
     const isVisible = getTag(chunk, 'is_visible_in_menu');
     
-    // MarleenKookt feed gebruikt soms "1" als string
+    // Check of het een hoofdgerecht is en zichtbaar
     if (isMain !== '1' || isVisible !== '1') continue;
 
     const type = getTag(chunk, 'type');
     if (SKIP_TYPES.includes(type)) continue;
 
-    // Belangrijk: De titel zit in de <n> tag
-    const name = getTag(chunk, 'n');
+    // MARLEENKOOKT SPECIFIEK: De titel zit in <n>
+    let name = getTag(chunk, 'n');
+    
+    // Fallback: als <n> leeg is, probeer <name>
+    if (!name) name = getTag(chunk, 'name');
 
     products.push({
       date,
@@ -92,6 +99,7 @@ function pickFour(products) {
     if (!byDate[p.date]) byDate[p.date] = [];
     byDate[p.date].push(p);
   }
+  
   const dates = Object.keys(byDate).sort();
   const picked = [];
   const usedSkus = new Set();
@@ -99,19 +107,29 @@ function pickFour(products) {
   for (const date of dates) {
     if (picked.length >= 4) break;
     const day = byDate[date];
-    // Zoek eerst vlees en dan vega per dag om variatie te krijgen
-    const meat = day.find(p => MEAT_TYPES.includes(p.type) && !usedSkus.has(p.sku));
-    if (meat && picked.length < 4) { picked.push(meat); usedSkus.add(meat.sku); }
     
-    const veg  = day.find(p => VEG_TYPES.includes(p.type)  && !usedSkus.has(p.sku));
-    if (veg  && picked.length < 4) { picked.push(veg);  usedSkus.add(veg.sku);  }
+    // Pak 1 vlees/vis en 1 vega per dag voor maximale variatie
+    const meat = day.find(p => MEAT_TYPES.includes(p.type) && !usedSkus.has(p.sku));
+    if (meat && picked.length < 4) { 
+        picked.push(meat); 
+        usedSkus.add(meat.sku); 
+    }
+    
+    const veg = day.find(p => VEG_TYPES.includes(p.type) && !usedSkus.has(p.sku));
+    if (veg && picked.length < 4) { 
+        picked.push(veg); 
+        usedSkus.add(veg.sku); 
+    }
   }
 
-  // Backup als we nog geen 4 gerechten hebben
+  // Vul aan tot 4 als we er nog niet zijn
   if (picked.length < 4) {
     for (const p of products) {
       if (picked.length >= 4) break;
-      if (!usedSkus.has(p.sku)) { picked.push(p); usedSkus.add(p.sku); }
+      if (!usedSkus.has(p.sku)) { 
+          picked.push(p); 
+          usedSkus.add(p.sku); 
+      }
     }
   }
   return picked.slice(0, 4);
@@ -127,16 +145,16 @@ module.exports = async (req, res) => {
     const fromDate = toYMD(monday);
 
     const xml      = await fetchXML(FEED_URL);
+    
+    // Als de XML niet geladen kan worden
+    if (!xml) throw new Error("Empty XML response");
+
     const products = parseProducts(xml, fromDate);
     const four     = pickFour(products);
 
-    if (four.length === 0) {
-      return res.status(200).json({ items: [] });
-    }
-
     const items = four.map((p, i) => ({
       id:          p.sku || 'item-' + i,
-      title:       p.name, // Hier komt nu de waarde uit <n> terecht
+      title:       p.name || 'Naamloos gerecht', // Fallback voor display
       description: p.description,
       url:         p.url,
       image_url:   p.image_url,
@@ -151,7 +169,7 @@ module.exports = async (req, res) => {
     res.status(200).json({ items });
 
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Error fetching menu feed' });
+    console.error("Feed Error:", err.message);
+    res.status(500).json({ error: 'Error fetching menu feed', details: err.message });
   }
 };
