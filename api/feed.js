@@ -19,7 +19,7 @@ function toYMD(date) {
   return date.toISOString().slice(0, 10);
 }
 
-// Snellere helper om tekst tussen tags te vinden zonder zware regex
+// Snelle helper om tekst tussen tags te vinden zonder zware regex
 function findTag(str, tag) {
   const startTag = `<${tag}>`;
   const endTag = `</${tag}>`;
@@ -28,12 +28,10 @@ function findTag(str, tag) {
   const end = str.indexOf(endTag, start);
   if (end === -1) return '';
   
-  let content = str.substring(start + startTag.length, end);
-  return content
+  return str.substring(start + startTag.length, end)
     .replace(/<!\[CDATA\[/gi, '')
     .replace(/\]\]>/gi, '')
     .replace(/&amp;/g, '&')
-    .replace(/&#x20AC;/g, '€')
     .trim();
 }
 
@@ -44,7 +42,6 @@ module.exports = async (req, res) => {
   try {
     const fromDate = toYMD(getNextMonday());
     
-    // Haal de data op
     const xml = await new Promise((resolve, reject) => {
       https.get(FEED_URL, (res) => {
         let data = '';
@@ -53,19 +50,38 @@ module.exports = async (req, res) => {
       }).on('error', reject);
     });
 
-    if (!xml) throw new Error("Geen data ontvangen");
-
-    // Splits de XML op een simpele manier
     const products = [];
-    const parts = xml.split('<product ');
+    const parts = xml.split('<product '); // Efficiënte split
     
     for (let i = 1; i < parts.length; i++) {
       const chunk = parts[i];
-      
       const date = findTag(chunk, 'date');
+      
       if (!date || date < fromDate) continue;
-
       if (findTag(chunk, 'is_main_course') !== '1') continue;
+      if (SKIP_TYPES.includes(findTag(chunk, 'type'))) continue;
 
-      const type = findTag(chunk, 'type');
-      if (SKIP_TYPES.includes(type)) continue;
+      const skuMatch = chunk.match(/sku="([^"]+)"/);
+      const sku = skuMatch ? skuMatch[1] : 'MKM-' + i;
+
+      // Gebruik <n> tag voor de titel
+      let name = findTag(chunk, 'n') || findTag(chunk, 'name');
+
+      products.push({
+        id: sku,
+        title: name,
+        description: findTag(chunk, 'description'),
+        link: findTag(chunk, 'url'),
+        image_link: findTag(chunk, 'image_url'),
+        price: parseFloat(findTag(chunk, 'price')) || 13.50,
+        date: date
+      });
+    }
+
+    // Pak de eerste 4 beschikbare gerechten
+    res.status(200).json(products.slice(0, 4));
+
+  } catch (err) {
+    res.status(500).json({ error: "Feed Error", message: err.message });
+  }
+};
