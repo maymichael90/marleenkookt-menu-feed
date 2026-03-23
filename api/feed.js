@@ -30,44 +30,56 @@ function fetchXML(url) {
   });
 }
 
-function getTagValue(str, tag) {
-  const match = str.match(new RegExp('<' + tag + '[^>]*>([\\s\\S]*?)<\\/' + tag + '>'));
-  return match ? match[1].replace(/&amp;/g,'&').replace(/&#x20AC;/g,'€').replace(/&#xA0;/g,' ').replace(/<!\[CDATA\[|\]\]>/g,'').trim() : '';
+// Generic tag extractor
+function getTag(str, tag) {
+  const re = new RegExp('<' + tag + '(?:\\s[^>]*)?>([\\s\\S]*?)<\\/' + tag + '>');
+  const m = str.match(re);
+  if (!m) return '';
+  return m[1]
+    .replace(/&amp;/g, '&')
+    .replace(/&#x20AC;/g, '€')
+    .replace(/&#xA0;/g, ' ')
+    .replace(/<!\[CDATA\[/g, '')
+    .replace(/\]\]>/g, '')
+    .trim();
 }
 
 function parseProducts(xml, fromDate) {
   const products = [];
-  const dayBlocks = xml.match(/<day date="([^"]+)"[\s\S]*?<\/day>/g) || [];
 
-  for (const block of dayBlocks) {
-    const dateMatch = block.match(/date="([^"]+)"/);
-    if (!dateMatch) continue;
-    const date = dateMatch[1];
-    if (date < fromDate) continue;
+  // Split into per-product chunks using SKU boundaries
+  // Each product starts with <product sku="..."> and ends with </product>
+  const productRe = /<product sku="([^"]+)">([\s\S]*?)<\/product>/g;
+  let match;
 
-    const productBlocks = block.match(/<product sku[\s\S]*?<\/product>/g) || [];
-    for (const p of productBlocks) {
-      if (getTagValue(p, 'is_main_course') !== '1') continue;
-      if (getTagValue(p, 'is_visible_in_menu') !== '1') continue;
-      const type = getTagValue(p, 'type');
-      if (SKIP_TYPES.includes(type)) continue;
+  while ((match = productRe.exec(xml)) !== null) {
+    const sku   = match[1];
+    const chunk = match[2];
 
-      // <n> is a single-char tag — needs its own regex
-      const nameMatch = p.match(/<n>([^<]+)<\/n>/);
-      const name = nameMatch ? nameMatch[1].trim() : '';
+    const date = getTag(chunk, 'date');
+    if (!date || date < fromDate) continue;
 
-      products.push({
-        date,
-        sku:         getTagValue(p, 'sku'),
-        name,
-        url:         getTagValue(p, 'url'),
-        image_url:   getTagValue(p, 'image_url'),
-        price:       getTagValue(p, 'price'),
-        description: getTagValue(p, 'description'),
-        type,
-      });
-    }
+    const isMain    = getTag(chunk, 'is_main_course');
+    const isVisible = getTag(chunk, 'is_visible_in_menu');
+    if (isMain !== '1' || isVisible !== '1') continue;
+
+    const type = getTag(chunk, 'type');
+    if (SKIP_TYPES.includes(type)) continue;
+
+    const name = getTag(chunk, 'n');
+
+    products.push({
+      date,
+      sku,
+      name,
+      url:         getTag(chunk, 'url'),
+      image_url:   getTag(chunk, 'image_url'),
+      price:       getTag(chunk, 'price'),
+      description: getTag(chunk, 'description'),
+      type,
+    });
   }
+
   return products;
 }
 
@@ -90,7 +102,6 @@ function pickFour(products) {
     if (veg  && picked.length < 4) { picked.push(veg);  usedSkus.add(veg.sku);  }
   }
 
-  // fallback: fill remaining with any unused SKU
   if (picked.length < 4) {
     for (const p of products) {
       if (picked.length >= 4) break;
