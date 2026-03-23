@@ -2,7 +2,9 @@ const https = require('https');
 
 const FEED_URL = 'https://www.marleenkookt.nl/menu/feed/xml';
 
-function extract(str, startTag, endTag) {
+function extract(str, tag) {
+  const startTag = `<${tag}>`;
+  const endTag = `</${tag}>`;
   const start = str.indexOf(startTag);
   if (start === -1) return '';
   const end = str.indexOf(endTag, start);
@@ -14,7 +16,7 @@ function extract(str, startTag, endTag) {
 }
 
 module.exports = async (req, res) => {
-  // Vertel Klaviyo expliciet dat dit JSON is
+  // Forceer JSON output
   res.setHeader('Content-Type', 'application/json; charset=utf-8');
   res.setHeader('Access-Control-Allow-Origin', '*');
 
@@ -27,29 +29,26 @@ module.exports = async (req, res) => {
       }).on('error', reject);
     });
 
-    const d = new Date();
-    d.setDate(d.getDate() + (d.getDay() === 0 ? 1 : 8 - d.getDay()));
-    const targetDate = d.toISOString().slice(0, 10);
+    // Datum voor volgende maandag (vandaag is 23 maart 2026)
+    const targetDate = "2026-03-30"; 
 
     const products = [];
     const rawItems = xml.split('<product ');
 
     for (let i = 1; i < rawItems.length; i++) {
       const item = rawItems[i];
-      const itemDate = extract(item, '<date>', '</date>');
+      const itemDate = extract(item, 'date');
 
-      // Filter op datum en hoofdgerecht
-      if (itemDate >= targetDate && extract(item, '<is_main_course>', '</is_main_course>') === '1') {
+      if (itemDate >= targetDate && extract(item, 'is_main_course') === '1') {
         const skuMatch = item.match(/sku="([^"]+)"/);
         
         products.push({
           unique_id: skuMatch ? skuMatch[1] : 'MKM-' + i,
-          title: extract(item, '<n>', '</n>') || extract(item, '<name>', '</name>'),
-          description: extract(item, '<description>', '</description>').substring(0, 200),
-          link: extract(item, '<url>', '</url>'),
-          image_link: extract(item, '<image_url>', '</image_url>'),
-          price: parseFloat(extract(item, '<price>', '</price>')) || 13.50,
-          metadata: { date: itemDate }
+          title: extract(item, 'n') || extract(item, 'name'),
+          description: extract(item, 'description').substring(0, 200),
+          link: extract(item, 'url'),
+          image_link: extract(item, 'image_url'),
+          price: parseFloat(extract(item, 'price')) || 13.50
         });
 
         if (products.length >= 10) break;
