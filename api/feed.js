@@ -14,7 +14,7 @@ function extract(str, startTag, endTag) {
 }
 
 module.exports = async (req, res) => {
-  // Dit vertelt de browser/Klaviyo dat dit GEEN XML is
+  // Vertel Klaviyo expliciet dat dit JSON is
   res.setHeader('Content-Type', 'application/json; charset=utf-8');
   res.setHeader('Access-Control-Allow-Origin', '*');
 
@@ -38,6 +38,7 @@ module.exports = async (req, res) => {
       const item = rawItems[i];
       const itemDate = extract(item, '<date>', '</date>');
 
+      // Filter op datum en hoofdgerecht
       if (itemDate >= targetDate && extract(item, '<is_main_course>', '</is_main_course>') === '1') {
         const skuMatch = item.match(/sku="([^"]+)"/);
         
@@ -47,7 +48,8 @@ module.exports = async (req, res) => {
           description: extract(item, '<description>', '</description>').substring(0, 200),
           link: extract(item, '<url>', '</url>'),
           image_link: extract(item, '<image_url>', '</image_url>'),
-          price: parseFloat(extract(item, '<price>', '</price>')) || 13.50
+          price: parseFloat(extract(item, '<price>', '</price>')) || 13.50,
+          metadata: { date: itemDate }
         });
 
         if (products.length >= 10) break;
