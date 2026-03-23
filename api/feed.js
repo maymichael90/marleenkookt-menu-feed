@@ -30,26 +30,26 @@ function fetchXML(url) {
   });
 }
 
-// Generic tag extractor
+// Verbeterde tag extractor die beter omgaat met korte tagnamen zoals <n>
 function getTag(str, tag) {
-  const re = new RegExp('<' + tag + '(?:\\s[^>]*)?>([\\s\\S]*?)<\\/' + tag + '>');
+  // Specifieke check voor de 'n' tag (titel) omdat die vaak de boosdoener is
+  const re = new RegExp('<' + tag + '[^>]*>([\\s\\S]*?)<\\/' + tag + '>');
   const m = str.match(re);
   if (!m) return '';
+  
   return m[1]
+    .replace(/<!\[CDATA\[/g, '')
+    .replace(/\]\]>/g, '')
     .replace(/&amp;/g, '&')
     .replace(/&#x20AC;/g, '€')
     .replace(/&#xA0;/g, ' ')
-    .replace(/<!\[CDATA\[/g, '')
-    .replace(/\]\]>/g, '')
     .trim();
 }
 
 function parseProducts(xml, fromDate) {
   const products = [];
-
-  // Split into per-product chunks using SKU boundaries
-  // Each product starts with <product sku="..."> and ends with </product>
-  const productRe = /<product sku="([^"]+)">([\s\S]*?)<\/product>/g;
+  // De feed gebruikt <product sku="...">...</product>
+  const productRe = /<product\s+sku="([^"]+)">([\s\S]*?)<\/product>/g;
   let match;
 
   while ((match = productRe.exec(xml)) !== null) {
@@ -61,11 +61,14 @@ function parseProducts(xml, fromDate) {
 
     const isMain    = getTag(chunk, 'is_main_course');
     const isVisible = getTag(chunk, 'is_visible_in_menu');
+    
+    // MarleenKookt feed gebruikt soms "1" als string
     if (isMain !== '1' || isVisible !== '1') continue;
 
     const type = getTag(chunk, 'type');
     if (SKIP_TYPES.includes(type)) continue;
 
+    // Belangrijk: De titel zit in de <n> tag
     const name = getTag(chunk, 'n');
 
     products.push({
@@ -96,12 +99,15 @@ function pickFour(products) {
   for (const date of dates) {
     if (picked.length >= 4) break;
     const day = byDate[date];
+    // Zoek eerst vlees en dan vega per dag om variatie te krijgen
     const meat = day.find(p => MEAT_TYPES.includes(p.type) && !usedSkus.has(p.sku));
-    const veg  = day.find(p => VEG_TYPES.includes(p.type)  && !usedSkus.has(p.sku));
     if (meat && picked.length < 4) { picked.push(meat); usedSkus.add(meat.sku); }
+    
+    const veg  = day.find(p => VEG_TYPES.includes(p.type)  && !usedSkus.has(p.sku));
     if (veg  && picked.length < 4) { picked.push(veg);  usedSkus.add(veg.sku);  }
   }
 
+  // Backup als we nog geen 4 gerechten hebben
   if (picked.length < 4) {
     for (const p of products) {
       if (picked.length >= 4) break;
@@ -124,13 +130,13 @@ module.exports = async (req, res) => {
     const products = parseProducts(xml, fromDate);
     const four     = pickFour(products);
 
-    if (four.length < 4) {
+    if (four.length === 0) {
       return res.status(200).json({ items: [] });
     }
 
     const items = four.map((p, i) => ({
       id:          p.sku || 'item-' + i,
-      title:       p.name,
+      title:       p.name, // Hier komt nu de waarde uit <n> terecht
       description: p.description,
       url:         p.url,
       image_url:   p.image_url,
