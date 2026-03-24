@@ -68,7 +68,8 @@ module.exports = async (req, res) => {
         description: extract(item, 'description').substring(0, 200),
         link:        extract(item, 'url'),
         image_link:  extract(item, 'image_url'),
-        price:       parseFloat(extract(item, 'price')) || 13.50
+        price:       parseFloat(extract(item, 'price')) || 13.50,
+        category:    "menu_volgende_week"
       });
     }
 
@@ -89,7 +90,8 @@ module.exports = async (req, res) => {
       description: p.description,
       link:        p.link,
       image_link:  p.image_link,
-      price:       p.price
+      price:       p.price,
+      category:    p.category
     })));
 
   } catch (err) {
