@@ -63,7 +63,7 @@ module.exports = async (req, res) => {
         sku,
         date: itemDate,
         type,
-        unique_id:   sku,
+        id:          sku,
         title:       extract(item, 'n') || extract(item, 'name'),
         description: extract(item, 'description').substring(0, 200),
         link:        extract(item, 'url'),
@@ -84,7 +84,7 @@ module.exports = async (req, res) => {
 
     // Klaviyo: direct array of dicts
     res.status(200).json(products.map(p => ({
-      unique_id:   p.unique_id,
+      id:          p.id,
       title:       p.title,
       description: p.description,
       link:        p.link,
