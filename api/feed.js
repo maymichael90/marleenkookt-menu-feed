@@ -5,16 +5,6 @@ const MEAT_TYPES = ['meat', 'fish', 'exclusive'];
 const VEG_TYPES  = ['vegetarian', 'bowl'];
 const SKIP_TYPES = ['kids', 'soup', 'dessert', 'breakfast'];
 
-// Automatically calculate next Monday
-function getNextMonday() {
-  const d = new Date();
-  const day = d.getDay(); // 0=Sun, 1=Mon, ...
-  const diff = day === 0 ? 1 : (8 - day);
-  d.setDate(d.getDate() + diff);
-  d.setHours(0, 0, 0, 0);
-  return d.toISOString().slice(0, 10); // returns "YYYY-MM-DD"
-}
-
 function extract(str, tag) {
   const startTag = '<' + tag + '>';
   const endTag   = '</' + tag + '>';
@@ -26,6 +16,15 @@ function extract(str, tag) {
     .replace(/<!\[CDATA\[/gi, '').replace(/\]\]>/gi, '')
     .replace(/&amp;/g, '&').replace(/&#x20AC;/g, '€').replace(/&#xA0;/g, ' ')
     .trim();
+}
+
+function getNextMonday() {
+  const d = new Date();
+  const day = d.getDay();
+  const diff = day === 0 ? 1 : (8 - day);
+  d.setDate(d.getDate() + diff);
+  d.setHours(0, 0, 0, 0);
+  return d.toISOString().slice(0, 10);
 }
 
 module.exports = async (req, res) => {
@@ -44,7 +43,7 @@ module.exports = async (req, res) => {
       }).on('error', reject);
     });
 
-    // Parse all products from next Monday onwards
+    // Parse all valid products from next Monday onwards
     const allProducts = [];
     const rawItems = xml.split('<product ');
 
@@ -66,7 +65,7 @@ module.exports = async (req, res) => {
         date: itemDate,
         type,
         unique_id:   sku,
-        title:       extract(item, 'n'),
+        title:       extract(item, 'n') || extract(item, 'name'),
         description: extract(item, 'description').substring(0, 200),
         link:        extract(item, 'url'),
         image_link:  extract(item, 'image_url'),
@@ -93,7 +92,7 @@ module.exports = async (req, res) => {
       if (veg  && picked.length < 4) { picked.push(veg);  usedSkus.add(veg.sku);  }
     }
 
-    // Klaviyo requires { items: [...] }
+    // Return as direct array — Klaviyo requires list of dicts
     const items = picked.map(p => ({
       unique_id:   p.unique_id,
       title:       p.title,
