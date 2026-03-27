@@ -1,0 +1,19 @@
+name: Sync menu naar Klaviyo
+
+on:
+  schedule:
+    - cron: '0 6 * * 1'  # Elke maandag om 06:00
+  workflow_dispatch:       # Ook handmatig te triggeren
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+      - run: npm install node-fetch
+      - run: node scripts/sync-klaviyo.js
+        env:
+          KLAVIYO_API_KEY: ${{ secrets.KLAVIYO_API_KEY }}
