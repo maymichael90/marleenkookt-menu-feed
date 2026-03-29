@@ -1,15 +1,43 @@
 const fetch = require('node-fetch');
 
-const KLAVIYO_API_KEY = 'pk_xxxx'; // jouw private key
-const FEED_API_URL = 'https://jouwdomain.vercel.app/api/menu'; // jouw feed endpoint
+const KLAVIYO_API_KEY = process.env.KLAVIYO_API_KEY;
+const FEED_API_URL = 'https://marleenkookt-menu-feed.vercel.app/api/feed';
+const CATALOG_ID = 'your-catalog-id'; // vul jouw catalog ID in
 
-async function syncToKlaviyo() {
-  // 1. Haal jouw feed op
-  const res = await fetch(FEED_API_URL);
-  const meals = await res.json();
+async function upsertMeal(meal) {
+  // Probeer eerst te updaten (PATCH)
+  const patch = await fetch(
+    `https://a.klaviyo.com/api/catalog-items/${meal.id}/`,
+    {
+      method: 'PATCH',
+      headers: {
+        'Authorization': `Klaviyo-API-Key ${KLAVIYO_API_KEY}`,
+        'revision': '2024-02-15',
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        data: {
+          type: 'catalog-item',
+          id: meal.id,
+          attributes: {
+            title:          meal.title,
+            description:    meal.description,
+            url:            meal.link,
+            image_full_url: meal.image_link,
+            price:          meal.price,
+            custom_metadata: {
+              day:      meal.day,
+              category: meal.category,
+              date:     meal.date
+            }
+          }
+        }
+      })
+    }
+  );
 
-  // 2. Push elk gerecht als Catalog item naar Klaviyo
-  for (const meal of meals) {
+  // Als het item nog niet bestaat → aanmaken via POST
+  if (patch.status === 404) {
     await fetch('https://a.klaviyo.com/api/catalog-items/', {
       method: 'POST',
       headers: {
@@ -21,12 +49,13 @@ async function syncToKlaviyo() {
         data: {
           type: 'catalog-item',
           attributes: {
-            external_id: meal.id,
-            title:       meal.title,
-            description: meal.description,
-            url:         meal.link,
+            external_id:    meal.id,
+            catalog_type:   '$default',
+            title:          meal.title,
+            description:    meal.description,
+            url:            meal.link,
             image_full_url: meal.image_link,
-            price:       meal.price,
+            price:          meal.price,
             custom_metadata: {
               day:      meal.day,
               category: meal.category,
@@ -36,8 +65,26 @@ async function syncToKlaviyo() {
         }
       })
     });
+    console.log(`Aangemaakt: ${meal.title}`);
+  } else {
+    console.log(`Bijgewerkt:  ${meal.title}`);
   }
-  console.log(`${meals.length} maaltijden gesynchroniseerd naar Klaviyo`);
+}
+
+async function syncToKlaviyo() {
+  try {
+    const res   = await fetch(FEED_API_URL);
+    const meals = await res.json();
+
+    for (const meal of meals) {
+      await upsertMeal(meal);
+    }
+
+    console.log(`Klaar — ${meals.length} maaltijden gesynchroniseerd`);
+  } catch (err) {
+    console.error('Sync mislukt:', err.message);
+    process.exit(1);
+  }
 }
 
 syncToKlaviyo();
