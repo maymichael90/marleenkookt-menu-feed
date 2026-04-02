@@ -2,7 +2,7 @@ const fetch = require('node-fetch');
 
 const KLAVIYO_API_KEY = process.env.KLAVIYO_API_KEY;
 const FEED_API_URL = 'https://marleenkookt-menu-feed.vercel.app/api/feed';
-const CATALOG_ID = 'your-catalog-id'; // vul jouw catalog ID in
+const CATALOG_ID = '79729'; // vul jouw catalog ID in
 
 async function upsertMeal(meal) {
   // Probeer eerst te updaten (PATCH)
