@@ -13,6 +13,8 @@ const TYPE_NL = {
   breakfast:  'ontbijt'
 };
 
+const DAY_NL = ['Zondag','Maandag','Dinsdag','Woensdag','Donderdag','Vrijdag','Zaterdag'];
+
 function extract(str, tag) {
   const startTag = `<${tag}>`;
   const endTag   = `</${tag}>`;
@@ -35,8 +37,6 @@ function getNextMonday() {
   return d.toISOString().slice(0, 10);
 }
 
-const DAY_NL = ['Zondag','Maandag','Dinsdag','Woensdag','Donderdag','Vrijdag','Zaterdag'];
-
 module.exports = async (req, res) => {
   res.setHeader('Content-Type', 'application/json; charset=utf-8');
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -44,8 +44,6 @@ module.exports = async (req, res) => {
 
   try {
     const fromDate = getNextMonday();
-
-    // Next Friday (end of week)
     const fridayDate = new Date(fromDate);
     fridayDate.setDate(fridayDate.getDate() + 4);
     const toDate = fridayDate.toISOString().slice(0, 10);
@@ -65,35 +63,33 @@ module.exports = async (req, res) => {
     for (let i = 1; i < rawItems.length; i++) {
       const item = rawItems[i];
       const itemDate = extract(item, 'date');
-
-      // Only next week Monday–Friday
       if (!itemDate || itemDate < fromDate || itemDate > toDate) continue;
       if (extract(item, 'is_main_course') !== '1') continue;
       if (extract(item, 'is_visible_in_menu') !== '1') continue;
 
       const type = extract(item, 'type');
-
       const skuMatch = item.match(/sku="([^"]+)"/);
       const sku = skuMatch ? skuMatch[1] : 'MKM-' + i;
-
-      // Skip duplicate SKUs (same dish on multiple days)
       if (usedSkus.has(sku)) continue;
       usedSkus.add(sku);
 
-      // Day name in Dutch
       const dow = new Date(itemDate + 'T00:00:00').getDay();
+      const categoryNL = TYPE_NL[type] || type;
       const dayName = DAY_NL[dow];
 
+      // Klaviyo requires $google_product_category for category filtering
+      // Use title with category prefix so filtering works via title search
       products.push({
-        id:          sku,
-        title:       extract(item, 'n') || extract(item, 'name'),
-        description: extract(item, 'description').substring(0, 200),
-        link:        extract(item, 'url'),
-        image_link:  extract(item, 'image_url'),
-        price:       parseFloat(extract(item, 'price')) || 13.50,
-        category:    TYPE_NL[type] || type,   // vlees / vis / vegetarisch / salade etc.
-        day:         dayName,                  // Maandag / Dinsdag etc.
-        date:        itemDate,
+        id:                        sku,
+        title:                     extract(item, 'n') || extract(item, 'name'),
+        description:               extract(item, 'description').substring(0, 200),
+        link:                      extract(item, 'url'),
+        image_link:                extract(item, 'image_url'),
+        price:                     parseFloat(extract(item, 'price')) || 13.50,
+        $google_product_category:  categoryNL,  // vlees / vis / vegetarisch / salade
+        google_product_category:   categoryNL,  // fallback
+        availability:              'in stock',
+        condition:                 dayName,      // day name in condition field for filtering
       });
     }
 
