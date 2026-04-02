@@ -39,12 +39,15 @@ function klaviyoRequest(method, path, body) {
   });
 }
 
+// ── STEP 1: Create or get category, return Klaviyo ID ──
 const categoryCache = {};
 
 async function ensureCategory(name) {
   if (categoryCache[name]) return categoryCache[name];
+
   const externalId = `mk-cat-${name}`;
 
+  // Try to create
   const res = await klaviyoRequest('POST', '/api/catalog-categories/', {
     data: {
       type: 'catalog-category',
@@ -59,11 +62,17 @@ async function ensureCategory(name) {
   let id;
   if (res.status === 201) {
     id = JSON.parse(res.body).data.id;
-    console.log(`📁 Category aangemaakt: ${name} (${id})`);
+    console.log(`📁 Category aangemaakt: ${name} → ${id}`);
   } else if (res.status === 409) {
-    const getRes = await klaviyoRequest('GET', `/api/catalog-categories/${CATALOG_TYPE}::${externalId}/`, null);
-    id = JSON.parse(getRes.body).data.id;
-    console.log(`📁 Category bestaat al: ${name} (${id})`);
+    // Already exists — fetch it
+    const get = await klaviyoRequest('GET', `/api/catalog-categories/${CATALOG_TYPE}::${externalId}/`, null);
+    if (get.status === 200) {
+      id = JSON.parse(get.body).data.id;
+      console.log(`📁 Category bestaat: ${name} → ${id}`);
+    } else {
+      console.warn(`⚠️  Kan category niet ophalen: ${name} (${get.status})`);
+      return null;
+    }
   } else {
     console.warn(`⚠️  Category fout (${res.status}): ${res.body}`);
     return null;
@@ -73,10 +82,8 @@ async function ensureCategory(name) {
   return id;
 }
 
-async function upsertMeal(meal) {
-  const categoryName = meal.google_product_category || meal.category || 'overig';
-  const categoryId   = await ensureCategory(categoryName);
-
+// ── STEP 2: Upsert item (without category relationship) ──
+async function upsertItem(meal) {
   const attributes = {
     title:          meal.title,
     description:    meal.description,
@@ -85,43 +92,80 @@ async function upsertMeal(meal) {
     price:          meal.price,
     published:      true,
     custom_metadata: {
-      day:  meal.condition,
-      date: meal.date,
+      day:  meal.condition || '',
+      date: meal.date || '',
     }
   };
-
-  const relationships = categoryId ? {
-    categories: { data: [{ type: 'catalog-category', id: categoryId }] }
-  } : undefined;
 
   const patch = await klaviyoRequest(
     'PATCH',
     `/api/catalog-items/${CATALOG_TYPE}::${meal.id}/`,
-    { data: { type: 'catalog-item', id: `${CATALOG_TYPE}::${meal.id}`, attributes, relationships } }
+    { data: { type: 'catalog-item', id: `${CATALOG_TYPE}::${meal.id}`, attributes } }
   );
 
   if (patch.status === 404) {
-    await klaviyoRequest('POST', '/api/catalog-items/', {
+    const post = await klaviyoRequest('POST', '/api/catalog-items/', {
       data: {
         type: 'catalog-item',
-        attributes: { external_id: meal.id, catalog_type: CATALOG_TYPE, ...attributes },
-        relationships
+        attributes: { external_id: meal.id, catalog_type: CATALOG_TYPE, ...attributes }
       }
     });
-    console.log(`✅ Aangemaakt: ${meal.title} [${categoryName}]`);
+    if (post.status === 201) {
+      console.log(`✅ Aangemaakt: ${meal.title}`);
+    } else {
+      console.warn(`⚠️  Aanmaken mislukt (${post.status}): ${meal.title}`);
+      console.warn(post.body);
+    }
+  } else if (patch.status === 200) {
+    console.log(`🔄 Bijgewerkt: ${meal.title}`);
   } else {
-    console.log(`🔄 Bijgewerkt:  ${meal.title} [${categoryName}]`);
+    console.warn(`⚠️  Update fout (${patch.status}): ${meal.title}`);
+    console.warn(patch.body);
   }
 }
 
+// ── STEP 3: Link item to category via relationships endpoint ──
+async function linkItemToCategory(itemId, categoryId) {
+  const res = await klaviyoRequest(
+    'POST',
+    `/api/catalog-categories/${categoryId}/relationships/items/`,
+    {
+      data: [{ type: 'catalog-item', id: `${CATALOG_TYPE}::${itemId}` }]
+    }
+  );
+  if (res.status === 204 || res.status === 200) {
+    console.log(`🔗 Gekoppeld: ${itemId} → ${categoryId}`);
+  } else if (res.status === 409) {
+    console.log(`🔗 Al gekoppeld: ${itemId}`);
+  } else {
+    console.warn(`⚠️  Koppelen mislukt (${res.status}): ${res.body}`);
+  }
+}
+
+// ── MAIN ────────────────────────────────────────────────
 async function syncToKlaviyo() {
   try {
     console.log('📡 Feed ophalen...');
     const meals = await httpGet(FEED_API_URL);
-    console.log(`📋 ${meals.length} maaltijden gevonden`);
+    console.log(`📋 ${meals.length} maaltijden gevonden\n`);
+
     for (const meal of meals) {
-      await upsertMeal(meal);
+      const categoryName = meal.google_product_category || meal.category || 'overig';
+
+      // 1. Ensure category exists
+      const categoryId = await ensureCategory(categoryName);
+
+      // 2. Upsert the item
+      await upsertItem(meal);
+
+      // 3. Link item to category (separate API call)
+      if (categoryId) {
+        await linkItemToCategory(meal.id, categoryId);
+      }
+
+      console.log('---');
     }
+
     console.log(`\n✅ Klaar — ${meals.length} maaltijden gesynchroniseerd`);
   } catch (err) {
     console.error('❌ Sync mislukt:', err.message);
