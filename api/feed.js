@@ -1,19 +1,13 @@
 const https = require('https');
 const FEED_URL = 'https://www.marleenkookt.nl/menu/feed/xml';
 
-const TYPE_NL = {
-  meat:       'vlees',
-  fish:       'vis',
-  exclusive:  'exclusief',
-  vegetarian: 'vegetarisch',
-  bowl:       'salade',
-  kids:       'kids',
-  soup:       'soep',
-  dessert:    'nagerecht',
-  breakfast:  'ontbijt'
-};
-
+const SKIP_TYPES = ['soup', 'dessert', 'breakfast'];
 const DAY_NL = ['Zondag','Maandag','Dinsdag','Woensdag','Donderdag','Vrijdag','Zaterdag'];
+
+const TYPE_NL = {
+  meat: 'vlees', fish: 'vis', exclusive: 'exclusief',
+  vegetarian: 'vegetarisch', bowl: 'salade', kids: 'kids'
+};
 
 function extract(str, tag) {
   const startTag = `<${tag}>`;
@@ -28,12 +22,18 @@ function extract(str, tag) {
     .trim();
 }
 
-function getNextMonday() {
+function getMonday(offset = 0) {
   const d = new Date();
   const day = d.getDay();
   const diff = day === 0 ? 1 : (8 - day);
-  d.setDate(d.getDate() + diff);
+  d.setDate(d.getDate() + diff + (offset * 7));
   d.setHours(0, 0, 0, 0);
+  return d.toISOString().slice(0, 10);
+}
+
+function getFriday(monday) {
+  const d = new Date(monday + 'T00:00:00');
+  d.setDate(d.getDate() + 4);
   return d.toISOString().slice(0, 10);
 }
 
@@ -43,10 +43,11 @@ module.exports = async (req, res) => {
   res.setHeader('Cache-Control', 's-maxage=3600');
 
   try {
-    const fromDate = getNextMonday();
-    const fridayDate = new Date(fromDate);
-    fridayDate.setDate(fridayDate.getDate() + 4);
-    const toDate = fridayDate.toISOString().slice(0, 10);
+    // This week and next week
+    const thisMonday = getMonday(0);
+    const thisFriday = getFriday(thisMonday);
+    const nextMonday = getMonday(1);
+    const nextFriday = getFriday(nextMonday);
 
     const xml = await new Promise((resolve, reject) => {
       https.get(FEED_URL, (response) => {
@@ -63,33 +64,45 @@ module.exports = async (req, res) => {
     for (let i = 1; i < rawItems.length; i++) {
       const item = rawItems[i];
       const itemDate = extract(item, 'date');
-      if (!itemDate || itemDate < fromDate || itemDate > toDate) continue;
+      if (!itemDate) continue;
+
+      // Only this week or next week
+      const isThisWeek = itemDate >= thisMonday && itemDate <= thisFriday;
+      const isNextWeek = itemDate >= nextMonday && itemDate <= nextFriday;
+      if (!isThisWeek && !isNextWeek) continue;
+
       if (extract(item, 'is_main_course') !== '1') continue;
       if (extract(item, 'is_visible_in_menu') !== '1') continue;
 
       const type = extract(item, 'type');
+      if (SKIP_TYPES.includes(type)) continue;
+
       const skuMatch = item.match(/sku="([^"]+)"/);
       const sku = skuMatch ? skuMatch[1] : 'MKM-' + i;
-      if (usedSkus.has(sku)) continue;
-      usedSkus.add(sku);
+
+      // Allow same SKU in different weeks
+      const uniqueKey = sku + '_' + (isNextWeek ? 'next' : 'this');
+      if (usedSkus.has(uniqueKey)) continue;
+      usedSkus.add(uniqueKey);
 
       const dow = new Date(itemDate + 'T00:00:00').getDay();
-      const categoryNL = TYPE_NL[type] || type;
-      const dayName = DAY_NL[dow];
+      const week = isNextWeek ? 'volgende_week' : 'deze_week';
+      const isKids = type === 'kids';
 
-      // Klaviyo requires $google_product_category for category filtering
-      // Use title with category prefix so filtering works via title search
       products.push({
-        id:                        sku,
-        title:                     extract(item, 'n') || extract(item, 'name'),
-        description:               extract(item, 'description').substring(0, 200),
-        link:                      extract(item, 'url'),
-        image_link:                extract(item, 'image_url'),
-        price:                     parseFloat(extract(item, 'price')) || 13.50,
-        $google_product_category:  categoryNL,  // vlees / vis / vegetarisch / salade
-        google_product_category:   categoryNL,  // fallback
-        availability:              'in stock',
-        condition:                 dayName,      // day name in condition field for filtering
+        // Use week-specific ID so same dish can appear in both weeks
+        id:          sku + '_' + week,
+        title:       extract(item, 'n') || extract(item, 'name'),
+        description: extract(item, 'description').substring(0, 200),
+        link:        extract(item, 'url'),
+        image_link:  extract(item, 'image_url'),
+        price:       parseFloat(extract(item, 'price')) || 13.50,
+        google_product_category: isKids
+          ? `kids_${week}`
+          : `menu_${week}`,
+        condition:   DAY_NL[dow],
+        date:        itemDate,
+        week,
       });
     }
 
