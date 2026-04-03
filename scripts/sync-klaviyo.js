@@ -65,7 +65,7 @@ async function ensureCategory(name) {
     console.log(`📁 Category aangemaakt: ${name} → ${id}`);
   } else if (res.status === 409) {
     // Already exists — fetch it
-    const get = await klaviyoRequest('GET', `/api/catalog-categories/${CATALOG_TYPE}::${externalId}/`, null);
+    const get = await klaviyoRequest('GET', `/api/catalog-categories/${CATALOG_TYPE}:::${externalId}/`, null);
     if (get.status === 200) {
       id = JSON.parse(get.body).data.id;
       console.log(`📁 Category bestaat: ${name} → ${id}`);
@@ -99,8 +99,8 @@ async function upsertItem(meal) {
 
   const patch = await klaviyoRequest(
     'PATCH',
-    `/api/catalog-items/${CATALOG_TYPE}::${meal.id}/`,
-    { data: { type: 'catalog-item', id: `${CATALOG_TYPE}::${meal.id}`, attributes } }
+    `/api/catalog-items/${CATALOG_TYPE}:::${meal.id}/`,
+    { data: { type: 'catalog-item', id: `${CATALOG_TYPE}:::${meal.id}`, attributes } }
   );
 
   if (patch.status === 404) {
@@ -130,7 +130,7 @@ async function linkItemToCategory(itemId, categoryId) {
     'POST',
     `/api/catalog-categories/${categoryId}/relationships/items/`,
     {
-      data: [{ type: 'catalog-item', id: `${CATALOG_TYPE}::${itemId}` }]
+      data: [{ type: 'catalog-item', id: `${CATALOG_TYPE}:::${itemId}` }]
     }
   );
   if (res.status === 204 || res.status === 200) {
