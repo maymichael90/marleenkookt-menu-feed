@@ -67,7 +67,7 @@ async function ensureCategory(name) {
     categoryCache[name] = realId;
     return realId;
   } else if (res.status === 409) {
-    const get = await klaviyoRequest('GET', `/api/catalog-categories/${encodeURIComponent(id)}/`, null);
+    const get = await klaviyoRequest('GET', `/api/catalog-categories/${id}/`, null);
     if (get.status === 200) {
       const realId = JSON.parse(get.body).data.id;
       console.log(`📁 Category bestaat: ${name} → ${realId}`);
@@ -98,7 +98,7 @@ async function upsertItem(meal) {
   // Try PATCH first
   const patch = await klaviyoRequest(
     'PATCH',
-    `/api/catalog-items/${encodeURIComponent(id)}/`,
+    `/api/catalog-items/${id}/`,
     { data: { type: 'catalog-item', id, attributes } }
   );
 
@@ -137,7 +137,7 @@ async function linkToCategory(itemKlaviyoId, catKlaviyoId) {
   if (!itemKlaviyoId || !catKlaviyoId) return;
   const res = await klaviyoRequest(
     'POST',
-    `/api/catalog-categories/${encodeURIComponent(catKlaviyoId)}/relationships/items/`,
+    `/api/catalog-categories/${catKlaviyoId}/relationships/items/`,
     { data: [{ type: 'catalog-item', id: itemKlaviyoId }] }
   );
   if (res.status === 204 || res.status === 200) {
