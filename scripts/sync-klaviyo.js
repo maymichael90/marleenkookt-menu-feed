@@ -1,4 +1,3 @@
-name: Weekly Menu Sync
 
 on:
   schedule:
