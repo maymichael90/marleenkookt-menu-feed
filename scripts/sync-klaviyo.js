@@ -1,174 +1,114 @@
 const https = require('https');
+const FEED_URL = 'https://www.marleenkookt.nl/menu/feed/xml';
 
-const KLAVIYO_API_KEY = process.env.KLAVIYO_API_KEY;
-const FEED_API_URL    = 'https://marleenkookt-menu-feed.vercel.app/api/feed';
+const SKIP_TYPES = ['soup', 'dessert', 'breakfast'];
+const DAY_NL = ['Zondag','Maandag','Dinsdag','Woensdag','Donderdag','Vrijdag','Zaterdag'];
 
-// Correct Klaviyo compound ID format: $custom:::$default:::external_id
-function itemId(externalId)     { return `$custom:::$default:::${externalId}`; }
-function categoryId(externalId) { return `$custom:::$default:::${externalId}`; }
+const TYPE_NL = {
+  meat: 'vlees', fish: 'vis', exclusive: 'exclusief',
+  vegetarian: 'vegetarisch', bowl: 'salade', kids: 'kids'
+};
 
-function klaviyoRequest(method, path, body) {
-  return new Promise((resolve, reject) => {
-    const data = body ? JSON.stringify(body) : null;
-    const options = {
-      hostname: 'a.klaviyo.com',
-      path,
-      method,
-      headers: {
-        'Authorization': `Klaviyo-API-Key ${KLAVIYO_API_KEY}`,
-        'revision':      '2024-02-15',
-        'Content-Type':  'application/json',
-        ...(data ? { 'Content-Length': Buffer.byteLength(data) } : {})
-      }
-    };
-    const req = https.request(options, (res) => {
-      let body = '';
-      res.on('data', chunk => body += chunk);
-      res.on('end', () => resolve({ status: res.statusCode, body }));
-    });
-    req.on('error', reject);
-    if (data) req.write(data);
-    req.end();
-  });
+function extract(str, tag) {
+  const startTag = `<${tag}>`;
+  const endTag   = `</${tag}>`;
+  const start = str.indexOf(startTag);
+  if (start === -1) return '';
+  const end = str.indexOf(endTag, start);
+  if (end === -1) return '';
+  return str.substring(start + startTag.length, end)
+    .replace(/<!\[CDATA\[/gi, '').replace(/\]\]>/gi, '')
+    .replace(/&amp;/g, '&').replace(/&#x20AC;/g, '€').replace(/&#xA0;/g, ' ')
+    .trim();
 }
 
-function httpGet(url) {
-  return new Promise((resolve, reject) => {
-    https.get(url, (res) => {
-      let body = '';
-      res.on('data', chunk => body += chunk);
-      res.on('end', () => { try { resolve(JSON.parse(body)); } catch(e) { reject(e); } });
-    }).on('error', reject);
-  });
+function getMonday(offset = 0) {
+  const d = new Date();
+  const day = d.getDay();
+  const diff = day === 0 ? 1 : (8 - day);
+  d.setDate(d.getDate() + diff + (offset * 7));
+  d.setHours(0, 0, 0, 0);
+  return d.toISOString().slice(0, 10);
 }
 
-const categoryCache = {};
-
-async function ensureCategory(name) {
-  if (categoryCache[name]) return categoryCache[name];
-  const extId = `mk-cat-${name}`;
-  const id    = categoryId(extId);
-
-  const res = await klaviyoRequest('POST', '/api/catalog-categories/', {
-    data: {
-      type: 'catalog-category',
-      attributes: {
-        external_id:  extId,
-        catalog_type: '$default',
-        name,
-      }
-    }
-  });
-
-  if (res.status === 201) {
-    const parsed = JSON.parse(res.body);
-    const realId = parsed.data.id;
-    console.log(`📁 Category aangemaakt: ${name} → ${realId}`);
-    categoryCache[name] = realId;
-    return realId;
-  } else if (res.status === 409) {
-    const get = await klaviyoRequest('GET', `/api/catalog-categories/${id}/`, null);
-    if (get.status === 200) {
-      const realId = JSON.parse(get.body).data.id;
-      console.log(`📁 Category bestaat: ${name} → ${realId}`);
-      categoryCache[name] = realId;
-      return realId;
-    }
-  }
-  console.warn(`⚠️  Category fout (${res.status}): ${name}`);
-  return null;
+function getFriday(monday) {
+  const d = new Date(monday + 'T00:00:00');
+  d.setDate(d.getDate() + 4);
+  return d.toISOString().slice(0, 10);
 }
 
-async function upsertItem(meal) {
-  const id = itemId(meal.id);
-  const attributes = {
-    title:          meal.title,
-    description:    meal.description,
-    url:            meal.link,
-    image_full_url: meal.image_link,
-    price:          meal.price,
-    published:      true,
-    custom_metadata: {
-      day:  meal.condition || '',
-      date: meal.date || '',
-      category: meal.google_product_category || '',
-    }
-  };
+module.exports = async (req, res) => {
+  res.setHeader('Content-Type', 'application/json; charset=utf-8');
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Cache-Control', 's-maxage=3600');
 
-  // Try PATCH first
-  const patch = await klaviyoRequest(
-    'PATCH',
-    `/api/catalog-items/${id}/`,
-    { data: { type: 'catalog-item', id, attributes } }
-  );
-
-  if (patch.status === 200) {
-    console.log(`🔄 Bijgewerkt: ${meal.title}`);
-    return id;
-  } else if (patch.status === 404) {
-    // Create new
-    const post = await klaviyoRequest('POST', '/api/catalog-items/', {
-      data: {
-        type: 'catalog-item',
-        attributes: {
-          external_id:  meal.id,
-          catalog_type: '$default',
-          ...attributes
-        }
-      }
-    });
-    if (post.status === 201) {
-      const realId = JSON.parse(post.body).data.id;
-      console.log(`✅ Aangemaakt: ${meal.title} → ${realId}`);
-      return realId;
-    } else {
-      console.warn(`⚠️  Aanmaken fout (${post.status}): ${meal.title}`);
-      console.warn(post.body);
-      return null;
-    }
-  } else {
-    console.warn(`⚠️  Update fout (${patch.status}): ${meal.title}`);
-    console.warn(patch.body);
-    return null;
-  }
-}
-
-async function linkToCategory(itemKlaviyoId, catKlaviyoId) {
-  if (!itemKlaviyoId || !catKlaviyoId) return;
-  const res = await klaviyoRequest(
-    'POST',
-    `/api/catalog-categories/${catKlaviyoId}/relationships/items/`,
-    { data: [{ type: 'catalog-item', id: itemKlaviyoId }] }
-  );
-  if (res.status === 204 || res.status === 200) {
-    console.log(`🔗 Gekoppeld aan category`);
-  } else if (res.status === 409) {
-    console.log(`🔗 Al gekoppeld`);
-  } else {
-    console.warn(`⚠️  Koppelen fout (${res.status}): ${res.body}`);
-  }
-}
-
-async function syncToKlaviyo() {
   try {
-    console.log('📡 Feed ophalen...');
-    const meals = await httpGet(FEED_API_URL);
-    console.log(`📋 ${meals.length} maaltijden gevonden\n`);
+    // This week and next week
+    const thisMonday = getMonday(0);
+    const thisFriday = getFriday(thisMonday);
+    const nextMonday = getMonday(1);
+    const nextFriday = getFriday(nextMonday);
 
-    for (const meal of meals) {
-      const catName = meal.google_product_category || 'overig';
+    const xml = await new Promise((resolve, reject) => {
+      https.get(FEED_URL, (response) => {
+        let body = '';
+        response.on('data', chunk => body += chunk);
+        response.on('end', () => resolve(body));
+      }).on('error', reject);
+    });
 
-      const catId  = await ensureCategory(catName);
-      const itemKlaviyoId = await upsertItem(meal);
-      await linkToCategory(itemKlaviyoId, catId);
-      console.log('---');
+    const products = [];
+    const usedSkus = new Set();
+    const rawItems = xml.split('<product ');
+
+    for (let i = 1; i < rawItems.length; i++) {
+      const item = rawItems[i];
+      const itemDate = extract(item, 'date');
+      if (!itemDate) continue;
+
+      // Only this week or next week
+      const isThisWeek = itemDate >= thisMonday && itemDate <= thisFriday;
+      const isNextWeek = itemDate >= nextMonday && itemDate <= nextFriday;
+      if (!isThisWeek && !isNextWeek) continue;
+
+      if (extract(item, 'is_main_course') !== '1') continue;
+      if (extract(item, 'is_visible_in_menu') !== '1') continue;
+
+      const type = extract(item, 'type');
+      if (SKIP_TYPES.includes(type)) continue;
+
+      const skuMatch = item.match(/sku="([^"]+)"/);
+      const sku = skuMatch ? skuMatch[1] : 'MKM-' + i;
+
+      // Allow same SKU in different weeks
+      const uniqueKey = sku + '_' + (isNextWeek ? 'next' : 'this');
+      if (usedSkus.has(uniqueKey)) continue;
+      usedSkus.add(uniqueKey);
+
+      const dow = new Date(itemDate + 'T00:00:00').getDay();
+      const week = isNextWeek ? 'volgende_week' : 'deze_week';
+      const isKids = type === 'kids';
+
+      products.push({
+        // Use week-specific ID so same dish can appear in both weeks
+        id:          sku + '_' + week,
+        title:       extract(item, 'n') || extract(item, 'name'),
+        description: extract(item, 'description').substring(0, 200),
+        link:        extract(item, 'url'),
+        image_link:  extract(item, 'image_url'),
+        price:       parseFloat(extract(item, 'price')) || 13.50,
+        google_product_category: isKids
+          ? `kids_${week}`
+          : `menu_${week}`,
+        condition:   DAY_NL[dow],
+        date:        itemDate,
+        week,
+      });
     }
 
-    console.log(`\n✅ Klaar — ${meals.length} maaltijden gesynchroniseerd`);
-  } catch (err) {
-    console.error('❌ Sync mislukt:', err.message);
-    process.exit(1);
-  }
-}
+    res.status(200).json(products);
 
-syncToKlaviyo();
+  } catch (err) {
+    res.status(500).json({ error: 'Fetch failed', message: err.message });
+  }
+};
