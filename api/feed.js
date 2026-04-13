@@ -4,11 +4,6 @@ const FEED_URL = 'https://www.marleenkookt.nl/menu/feed/xml';
 const SKIP_TYPES = ['soup', 'dessert', 'breakfast'];
 const DAY_NL = ['Zondag','Maandag','Dinsdag','Woensdag','Donderdag','Vrijdag','Zaterdag'];
 
-const TYPE_NL = {
-  meat: 'vlees', fish: 'vis', exclusive: 'exclusief',
-  vegetarian: 'vegetarisch', bowl: 'salade', kids: 'kids'
-};
-
 function extract(str, tag) {
   const startTag = `<${tag}>`;
   const endTag   = `</${tag}>`;
@@ -22,11 +17,12 @@ function extract(str, tag) {
     .trim();
 }
 
-function getMonday(offset = 0) {
+function getMondayOf(offsetWeeks) {
   const d = new Date();
-  const day = d.getDay();
-  const diff = day === 0 ? 1 : (8 - day);
-  d.setDate(d.getDate() + diff + (offset * 7));
+  const day = d.getDay(); // 0=Sun
+  // Go back to this week's Monday first
+  const diffToMonday = day === 0 ? -6 : 1 - day;
+  d.setDate(d.getDate() + diffToMonday + (offsetWeeks * 7));
   d.setHours(0, 0, 0, 0);
   return d.toISOString().slice(0, 10);
 }
@@ -43,10 +39,14 @@ module.exports = async (req, res) => {
   res.setHeader('Cache-Control', 's-maxage=3600');
 
   try {
-    // This week and next week
-    const thisMonday = getMonday(0);
+    const today = new Date().getDay(); // 0=Sun, 1=Mon, ..., 6=Sat
+
+    // This week always
+    const thisMonday = getMondayOf(0);
     const thisFriday = getFriday(thisMonday);
-    const nextMonday = getMonday(1);
+
+    // Next week: always include (from Wednesday onwards it's especially important)
+    const nextMonday = getMondayOf(1);
     const nextFriday = getFriday(nextMonday);
 
     const xml = await new Promise((resolve, reject) => {
@@ -66,7 +66,6 @@ module.exports = async (req, res) => {
       const itemDate = extract(item, 'date');
       if (!itemDate) continue;
 
-      // Only this week or next week
       const isThisWeek = itemDate >= thisMonday && itemDate <= thisFriday;
       const isNextWeek = itemDate >= nextMonday && itemDate <= nextFriday;
       if (!isThisWeek && !isNextWeek) continue;
@@ -80,26 +79,22 @@ module.exports = async (req, res) => {
       const skuMatch = item.match(/sku="([^"]+)"/);
       const sku = skuMatch ? skuMatch[1] : 'MKM-' + i;
 
-      // Allow same SKU in different weeks
-      const uniqueKey = sku + '_' + (isNextWeek ? 'next' : 'this');
+      const week = isNextWeek ? 'volgende_week' : 'deze_week';
+      const uniqueKey = sku + '_' + week;
       if (usedSkus.has(uniqueKey)) continue;
       usedSkus.add(uniqueKey);
 
       const dow = new Date(itemDate + 'T00:00:00').getDay();
-      const week = isNextWeek ? 'volgende_week' : 'deze_week';
       const isKids = type === 'kids';
 
       products.push({
-        // Use week-specific ID so same dish can appear in both weeks
         id:          sku + '_' + week,
         title:       extract(item, 'n') || extract(item, 'name'),
         description: extract(item, 'description').substring(0, 200),
         link:        extract(item, 'url'),
         image_link:  extract(item, 'image_url'),
         price:       parseFloat(extract(item, 'price')) || 13.50,
-        google_product_category: isKids
-          ? `kids_${week}`
-          : `menu_${week}`,
+        google_product_category: isKids ? `kids_${week}` : `menu_${week}`,
         condition:   DAY_NL[dow],
         date:        itemDate,
         week,
