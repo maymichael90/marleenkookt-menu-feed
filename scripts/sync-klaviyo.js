@@ -159,7 +159,9 @@ async function syncToKlaviyo() {
       console.log('---');
     }
 
-    console.log(`\n✅ Klaar — ${meals.length} maaltijden gesynchroniseerd`);
+    console.log(`
+✅ Klaar — ${meals.length} maaltijden gesynchroniseerd`);
+    await refreshProductFeeds();
     console.log('\nCategories beschikbaar:');
     console.log('  • menu_deze_week');
     console.log('  • menu_volgende_week');
@@ -173,3 +175,20 @@ async function syncToKlaviyo() {
 }
 
 syncToKlaviyo();
+
+// ── Refresh Klaviyo Product Feeds ─────────────────────
+async function refreshProductFeeds() {
+  const feedIds = ['8352644']; // voeg meer IDs toe indien nodig
+  for (const feedId of feedIds) {
+    const res = await klaviyoRequest(
+      'POST',
+      `/api/product-feeds/${feedId}/refresh/`,
+      null
+    );
+    if (res.status === 200 || res.status === 202 || res.status === 204) {
+      console.log(`🔄 Product Feed ${feedId} ververst`);
+    } else {
+      console.warn(`⚠️  Feed refresh fout (${res.status}): ${res.body}`);
+    }
+  }
+}
