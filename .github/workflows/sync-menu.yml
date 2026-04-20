@@ -2,7 +2,8 @@ name: Weekly Menu Sync
 
 on:
   schedule:
-    - cron: '0 6 * * *'  # Every day at 06:00 UTC
+    - cron: '0 6 * * 5'  # Every Friday at 06:00 UTC (08:00 NL time)
+    - cron: '0 6 * * 1'  # Every Monday at 06:00 UTC (08:00 NL time)
   workflow_dispatch:
     inputs:
       action:
