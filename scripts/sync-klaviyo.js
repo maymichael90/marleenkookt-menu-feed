@@ -161,7 +161,7 @@ async function syncToKlaviyo() {
 
     console.log(`
 ✅ Klaar — ${meals.length} maaltijden gesynchroniseerd`);
-    await refreshProductFeeds();
+    
     console.log('\nCategories beschikbaar:');
     console.log('  • menu_deze_week');
     console.log('  • menu_volgende_week');
@@ -189,6 +189,87 @@ async function refreshProductFeeds() {
       console.log(`🔄 Product Feed ${feedId} ververst`);
     } else {
       console.warn(`⚠️  Feed refresh fout (${res.status}): ${res.body}`);
+    }
+  }
+}
+
+
+// ── Delete and recreate Product Feeds ─────────────────
+async function recreateProductFeeds() {
+  const feeds = [
+    {
+      id:       '8283104',
+      name:     'deze_week2',
+      category: 'menu_deze_week',
+    },
+    {
+      id:       '8352644',
+      name:     'menu_nxt_week',
+      category: 'menu_volgende_week',
+    },
+  ];
+
+  for (const feed of feeds) {
+    // Delete existing feed
+    const del = await klaviyoRequest('DELETE', `/api/product-feeds/${feed.id}/`, null);
+    if (del.status === 204 || del.status === 404) {
+      console.log(`🗑️  Product Feed verwijderd: ${feed.name}`);
+    } else {
+      console.warn(`⚠️  Verwijderen mislukt (${del.status}): ${feed.name}`);
+      console.warn(del.body);
+      continue;
+    }
+
+    // Recreate feed
+    const post = await klaviyoRequest('POST', '/api/product-feeds/', {
+      data: {
+        type: 'product-feed',
+        attributes: {
+          name:   feed.name,
+          sort_order: 'desc',
+          filters: [
+            {
+              field:    'category',
+              operator: 'contains',
+              value:    feed.category,
+            }
+          ]
+        }
+      }
+    });
+
+    if (post.status === 201 || post.status === 200) {
+      const newId = JSON.parse(post.body).data.id;
+      console.log(`✅ Product Feed aangemaakt: ${feed.name} → ${newId}`);
+    } else {
+      console.warn(`⚠️  Aanmaken mislukt (${post.status}): ${feed.name}`);
+      console.warn(post.body);
+    }
+  }
+}
+
+// ── Force refresh via PATCH (keeps IDs stable) ────────
+async function forceRefreshFeeds() {
+  const feeds = [
+    { id: '8283104', name: 'deze_week2',    category: 'menu_deze_week'     },
+    { id: '8352644', name: 'menu_nxt_week', category: 'menu_volgende_week' },
+  ];
+
+  for (const feed of feeds) {
+    const res = await klaviyoRequest('PATCH', `/api/product-feeds/${feed.id}/`, {
+      data: {
+        type: 'product-feed',
+        id:   feed.id,
+        attributes: {
+          name: feed.name,
+        }
+      }
+    });
+    if (res.status === 200) {
+      console.log(`🔄 Feed ververst: ${feed.name} (ID: ${feed.id})`);
+    } else {
+      console.warn(`⚠️  Feed refresh fout (${res.status}): ${feed.name}`);
+      console.warn(res.body);
     }
   }
 }
