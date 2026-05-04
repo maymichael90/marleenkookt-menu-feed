@@ -36,7 +36,7 @@ function getFriday(monday) {
 module.exports = async (req, res) => {
   res.setHeader('Content-Type', 'application/json; charset=utf-8');
   res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Cache-Control', 's-maxage=3600');
+  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
 
   try {
     const today = new Date().getDay(); // 0=Sun, 1=Mon, ..., 6=Sat
