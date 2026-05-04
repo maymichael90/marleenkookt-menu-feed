@@ -91,7 +91,7 @@ module.exports = async (req, res) => {
         id:          sku + '_' + week,
         title:       extract(item, 'n') || extract(item, 'name'),
         description: extract(item, 'description').substring(0, 200),
-        link:        extract(item, 'url'),
+        link:        'https://abonnementen.marleenkookt.nl/subscribe',
         image_link:  extract(item, 'image_url'),
         price:       parseFloat(extract(item, 'price')) || 13.50,
         google_product_category: isKids ? `kids_${week}` : `menu_${week}`,
