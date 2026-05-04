@@ -178,7 +178,7 @@ syncToKlaviyo();
 
 // ── Refresh Klaviyo Product Feeds ─────────────────────
 async function refreshProductFeeds() {
-  const feedIds = ['8352644']; // voeg meer IDs toe indien nodig
+  const feedIds = ['8352644', '8283104']; // voeg meer IDs toe indien nodig
   for (const feedId of feedIds) {
     const res = await klaviyoRequest(
       'POST',
